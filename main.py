@@ -272,10 +272,36 @@ def extract_categories(card, page_url):
     return categories
 
 
+
 def extract_page_categories(soup, page_url):
     categories = []
     seen = set()
 
+    def add_category(name, href=None):
+        name = re.sub(r"\s+", " ", name or "").strip()
+        name = name.strip(" ,|/-")
+
+        if not name:
+            return
+
+        # Avoid treating generic labels as categories.
+        if name.casefold() in {
+            "category", "categories", "genre", "genres",
+            "tag", "tags", "home", "uncategorized"
+        }:
+            return
+
+        key = name.casefold()
+
+        if key not in seen:
+            seen.add(key)
+
+            categories.append({
+                "name": name,
+                "url": urljoin(page_url, href) if href else None
+            })
+
+    # 1. Standard WordPress category and tag links.
     selectors = [
         'a[rel~="category"]',
         'a[rel~="tag"]',
@@ -284,34 +310,63 @@ def extract_page_categories(soup, page_url):
         '.tags-links a',
         '.post-category a',
         '.entry-category a',
+        '.meta-category a',
+        '.categories a',
+        '.genres a',
+        '.genre a',
+        '.post-meta a'
     ]
 
     for selector in selectors:
-
         for anchor in soup.select(selector):
+            href = anchor.get("href", "")
+            if href and urlparse(urljoin(page_url, href)).hostname == ALLOWED_HOST:
+                add_category(
+                    anchor.get_text(" ", strip=True),
+                    href
+                )
 
-            name = re.sub(
-                r"\s+",
-                " ",
-                anchor.get_text(" ", strip=True)
-            ).strip()
+    # 2. Look for common custom taxonomy containers.
+    container_selectors = [
+        '[class*="genre"]',
+        '[class*="category"]',
+        '[class*="cat-links"]',
+        '[class*="post-meta"]',
+        '[class*="movie-meta"]'
+    ]
 
-            href = urljoin(
-                page_url,
-                anchor.get("href", "")
-            )
+    for selector in container_selectors:
+        for container in soup.select(selector):
+            for anchor in container.select("a"):
+                href = anchor.get("href", "")
+                if href and urlparse(urljoin(page_url, href)).hostname == ALLOWED_HOST:
+                    add_category(
+                        anchor.get_text(" ", strip=True),
+                        href
+                    )
 
-            if (
-                name
-                and urlparse(href).hostname == ALLOWED_HOST
-                and name.casefold() not in seen
+    # 3. Fallback: extract genres from the meta description.
+    if not categories:
+        description = get_meta_content(
+            soup,
+            [
+                'meta[name="description"]',
+                'meta[property="og:description"]'
+            ]
+        ) or ""
+
+        match = re.search(
+            r"based on\s+(.+?)(?:\.|$)",
+            description,
+            re.I
+        )
+
+        if match:
+            for name in re.split(
+                r"\s*,\s*|\s+and\s+",
+                match.group(1)
             ):
-                seen.add(name.casefold())
-
-                categories.append({
-                    "name": name,
-                    "url": href
-                })
+                add_category(name)
 
     return categories
 
