@@ -11,6 +11,7 @@ import re
 # =========================================================
 
 BASE_URL = "https://new1.bollyflix.tours/"
+BASE_URL = "https://vegamovies17.co.in/"
 ALLOWED_HOST = urlparse(BASE_URL).hostname
 
 CATEGORY_PATH_MARKERS = (
