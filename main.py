@@ -12,6 +12,8 @@ import re
 
 BASE_URL = "https://new1.bollyflix.tours/"
 BASE_URL = "https://vegamovies17.co.in/"
+BASE_URL = "https://filmyfly.kred"
+BASE_URL = "https://new15.hdhub4u.cl/"
 ALLOWED_HOST = urlparse(BASE_URL).hostname
 
 CATEGORY_PATH_MARKERS = (
