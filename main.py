@@ -7,14 +7,17 @@ import requests
 import re
 
 # =========================================================
-# CONFIGURATION
+# CONFIGURATION - MULTIPLE SUPPORTED DOMAINS
 # =========================================================
 
-BASE_URL = "https://new1.bollyflix.tours/"
-BASE_URL = "https://vegamovies17.co.in/"
-BASE_URL = "https://filmyfly.kred"
+ALLOWED_DOMAINS = {
+    "new1.bollyflix.tours",
+    "vegamovies17.co.in",
+    "filmyfly.kred",
+    "new15.hdhub4u.cl",
+}
+
 BASE_URL = "https://new15.hdhub4u.cl/"
-ALLOWED_HOST = urlparse(BASE_URL).hostname
 
 CATEGORY_PATH_MARKERS = (
     "/category/",
@@ -33,16 +36,13 @@ HEADERS = {
 REQUEST_TIMEOUT = 25
 
 # =========================================================
-# FASTAPI APPLICATION
+# FASTAPI
 # =========================================================
 
 app = FastAPI(
-    title="Movie Metadata API",
-    version="2.0.0",
-    description=(
-        "API for extracting movie and web-series metadata, "
-        "including titles, descriptions, categories and images."
-    )
+    title="Multi-Domain Movie Metadata API",
+    version="3.0.0",
+    description="Movie and web-series metadata extraction from multiple domains."
 )
 
 app.add_middleware(
@@ -57,6 +57,7 @@ app.add_middleware(
 # =========================================================
 
 def validate_source_url(url: str):
+
     parsed = urlparse(url)
 
     if parsed.scheme != "https":
@@ -65,10 +66,13 @@ def validate_source_url(url: str):
             detail="Only HTTPS URLs are allowed."
         )
 
-    if parsed.hostname != ALLOWED_HOST:
+    if parsed.hostname not in ALLOWED_DOMAINS:
         raise HTTPException(
             status_code=400,
-            detail=f"Only URLs from {ALLOWED_HOST} are allowed."
+            detail={
+                "error": "Unsupported domain",
+                "allowed_domains": sorted(ALLOWED_DOMAINS)
+            }
         )
 
     if parsed.username or parsed.password:
@@ -85,6 +89,7 @@ def validate_source_url(url: str):
 # =========================================================
 
 def fetch_soup(url: str):
+
     validate_source_url(url)
 
     try:
@@ -98,12 +103,12 @@ def fetch_soup(url: str):
         if 300 <= response.status_code < 400:
             raise HTTPException(
                 status_code=502,
-                detail="The source page redirected. Redirects are not followed."
+                detail="Source page redirected. Redirects are not followed."
             )
 
         response.raise_for_status()
 
-        if urlparse(response.url).hostname != ALLOWED_HOST:
+        if urlparse(response.url).hostname not in ALLOWED_DOMAINS:
             raise HTTPException(
                 status_code=502,
                 detail="Unexpected source hostname."
@@ -123,6 +128,7 @@ def fetch_soup(url: str):
 # =========================================================
 
 def clean_title(text: str) -> str:
+
     text = re.sub(r"\s+", " ", text or "").strip()
 
     text = re.sub(
@@ -136,7 +142,9 @@ def clean_title(text: str) -> str:
 
 
 def get_meta_content(soup, selectors):
+
     for selector in selectors:
+
         tag = soup.select_one(selector)
 
         if tag and tag.get("content"):
@@ -146,6 +154,7 @@ def get_meta_content(soup, selectors):
 
 
 def get_image_url(img, page_url):
+
     if not img:
         return None
 
@@ -158,6 +167,7 @@ def get_image_url(img, page_url):
     )
 
     for attribute in attributes:
+
         value = img.get(attribute)
 
         if not value or value.startswith("data:"):
@@ -182,15 +192,12 @@ def get_image_url(img, page_url):
 # =========================================================
 
 def is_category_link(anchor):
+
     href = (anchor.get("href") or "").lower()
 
-    classes = " ".join(
-        anchor.get("class", [])
-    ).lower()
+    classes = " ".join(anchor.get("class", [])).lower()
 
-    rel = " ".join(
-        anchor.get("rel", [])
-    ).lower()
+    rel = " ".join(anchor.get("rel", [])).lower()
 
     return (
         any(marker in href for marker in CATEGORY_PATH_MARKERS)
@@ -201,6 +208,7 @@ def is_category_link(anchor):
 
 
 def extract_categories(card, page_url):
+
     categories = []
     seen = set()
 
@@ -213,19 +221,15 @@ def extract_categories(card, page_url):
             continue
 
         name = re.sub(
-            r"\s+",
-            " ",
+            r"\s+", " ",
             anchor.get_text(" ", strip=True)
         ).strip()
 
-        href = urljoin(
-            page_url,
-            anchor.get("href", "")
-        )
+        href = urljoin(page_url, anchor.get("href", ""))
 
         if (
             not name
-            or urlparse(href).hostname != ALLOWED_HOST
+            or urlparse(href).hostname not in ALLOWED_DOMAINS
         ):
             continue
 
@@ -239,55 +243,22 @@ def extract_categories(card, page_url):
                 "url": href
             })
 
-    if not categories:
-        selectors = (
-            '[class*="cat-links"] a, '
-            '[class*="post-category"] a, '
-            '[class*="category"] a, '
-            'a[rel~="category tag"]'
-        )
-
-        for anchor in card.select(selectors):
-
-            name = re.sub(
-                r"\s+",
-                " ",
-                anchor.get_text(" ", strip=True)
-            ).strip()
-
-            href = urljoin(
-                page_url,
-                anchor.get("href", "")
-            )
-
-            if (
-                name
-                and urlparse(href).hostname == ALLOWED_HOST
-                and name.casefold() not in seen
-            ):
-                seen.add(name.casefold())
-
-                categories.append({
-                    "name": name,
-                    "url": href
-                })
-
     return categories
 
 
-
 def extract_page_categories(soup, page_url):
+
     categories = []
     seen = set()
 
     def add_category(name, href=None):
+
         name = re.sub(r"\s+", " ", name or "").strip()
         name = name.strip(" ,|/-")
 
         if not name:
             return
 
-        # Avoid treating generic labels as categories.
         if name.casefold() in {
             "category", "categories", "genre", "genres",
             "tag", "tags", "home", "uncategorized"
@@ -304,7 +275,6 @@ def extract_page_categories(soup, page_url):
                 "url": urljoin(page_url, href) if href else None
             })
 
-    # 1. Standard WordPress category and tag links.
     selectors = [
         'a[rel~="category"]',
         'a[rel~="tag"]',
@@ -321,15 +291,21 @@ def extract_page_categories(soup, page_url):
     ]
 
     for selector in selectors:
+
         for anchor in soup.select(selector):
+
             href = anchor.get("href", "")
-            if href and urlparse(urljoin(page_url, href)).hostname == ALLOWED_HOST:
+
+            if (
+                href
+                and urlparse(urljoin(page_url, href)).hostname
+                in ALLOWED_DOMAINS
+            ):
                 add_category(
                     anchor.get_text(" ", strip=True),
                     href
                 )
 
-    # 2. Look for common custom taxonomy containers.
     container_selectors = [
         '[class*="genre"]',
         '[class*="category"]',
@@ -339,17 +315,25 @@ def extract_page_categories(soup, page_url):
     ]
 
     for selector in container_selectors:
+
         for container in soup.select(selector):
+
             for anchor in container.select("a"):
+
                 href = anchor.get("href", "")
-                if href and urlparse(urljoin(page_url, href)).hostname == ALLOWED_HOST:
+
+                if (
+                    href
+                    and urlparse(urljoin(page_url, href)).hostname
+                    in ALLOWED_DOMAINS
+                ):
                     add_category(
                         anchor.get_text(" ", strip=True),
                         href
                     )
 
-    # 3. Fallback: extract genres from the meta description.
     if not categories:
+
         description = get_meta_content(
             soup,
             [
@@ -365,6 +349,7 @@ def extract_page_categories(soup, page_url):
         )
 
         if match:
+
             for name in re.split(
                 r"\s*,\s*|\s+and\s+",
                 match.group(1)
@@ -405,10 +390,7 @@ def extract_page_image(soup, page_url):
 
         image_tag = soup.select_one(selector)
 
-        image_url = get_image_url(
-            image_tag,
-            page_url
-        )
+        image_url = get_image_url(image_tag, page_url)
 
         if image_url:
             return image_url
@@ -420,20 +402,24 @@ def extract_page_image(soup, page_url):
 # LISTING SCRAPER
 # =========================================================
 
-def fetch_listing_page(page: int):
+def fetch_listing_page(page: int, base_url: str = BASE_URL):
+
+    validate_source_url(base_url)
+
+    base_url = base_url.rstrip("/") + "/"
 
     url = (
-        BASE_URL
+        base_url
         if page <= 1
-        else urljoin(BASE_URL, f"page/{page}/")
+        else urljoin(base_url, f"page/{page}/")
     )
 
     return fetch_soup(url), url
 
 
-def scrape_listing(page: int):
+def scrape_listing(page: int, base_url: str = BASE_URL):
 
-    soup, listing_url = fetch_listing_page(page)
+    soup, listing_url = fetch_listing_page(page, base_url)
 
     results = []
     seen = set()
@@ -452,14 +438,11 @@ def scrape_listing(page: int):
             anchor.get_text(" ", strip=True)
         )
 
-        href = urljoin(
-            listing_url,
-            anchor.get("href", "")
-        )
+        href = urljoin(listing_url, anchor.get("href", ""))
 
         if (
             not title
-            or urlparse(href).hostname != ALLOWED_HOST
+            or urlparse(href).hostname not in ALLOWED_DOMAINS
             or href in seen
         ):
             continue
@@ -473,15 +456,9 @@ def scrape_listing(page: int):
 
         img = card.find("img") if card else None
 
-        poster = get_image_url(
-            img,
-            listing_url
-        )
+        poster = get_image_url(img, listing_url)
 
-        categories = extract_categories(
-            card,
-            listing_url
-        )
+        categories = extract_categories(card, listing_url)
 
         results.append({
             "title": title,
@@ -507,7 +484,6 @@ def scrape_individual_page(url: str):
 
     soup = fetch_soup(url)
 
-    # TITLE
     title = get_meta_content(
         soup,
         [
@@ -519,27 +495,17 @@ def scrape_individual_page(url: str):
     if not title:
 
         title_tag = soup.select_one(
-            "h1.entry-title, "
-            "h1.post-title, "
-            "article h1, "
-            "h1"
+            "h1.entry-title, h1.post-title, article h1, h1"
         )
 
         if title_tag:
-            title = title_tag.get_text(
-                " ",
-                strip=True
-            )
+            title = title_tag.get_text(" ", strip=True)
 
     if not title and soup.title:
-        title = soup.title.get_text(
-            " ",
-            strip=True
-        )
+        title = soup.title.get_text(" ", strip=True)
 
     title = clean_title(title or "")
 
-    # DESCRIPTION
     description = get_meta_content(
         soup,
         [
@@ -549,33 +515,19 @@ def scrape_individual_page(url: str):
         ]
     )
 
-    # IMAGE
-    image_url = extract_page_image(
-        soup,
-        url
-    )
+    image_url = extract_page_image(soup, url)
 
-    # CATEGORIES
-    categories = extract_page_categories(
-        soup,
-        url
-    )
+    categories = extract_page_categories(soup, url)
 
-    # CANONICAL URL
-    canonical_tag = soup.select_one(
-        'link[rel="canonical"]'
-    )
+    canonical_tag = soup.select_one('link[rel="canonical"]')
 
     canonical_url = url
 
     if canonical_tag and canonical_tag.get("href"):
 
-        candidate = urljoin(
-            url,
-            canonical_tag["href"]
-        )
+        candidate = urljoin(url, canonical_tag["href"])
 
-        if urlparse(candidate).hostname == ALLOWED_HOST:
+        if urlparse(candidate).hostname in ALLOWED_DOMAINS:
             canonical_url = candidate
 
     return {
@@ -590,7 +542,8 @@ def scrape_individual_page(url: str):
             for category in categories
         ],
         "source_url": url,
-        "canonical_url": canonical_url
+        "canonical_url": canonical_url,
+        "source_domain": urlparse(url).hostname
     }
 
 
@@ -602,14 +555,16 @@ def scrape_individual_page(url: str):
 def home():
 
     return {
-        "name": "Movie Metadata API",
-        "version": "2.0.0",
+        "name": "Multi-Domain Movie Metadata API",
+        "version": "3.0.0",
         "status": "running",
+        "supported_domains": sorted(ALLOWED_DOMAINS),
         "endpoints": {
             "health": "/health",
-            "movies": "/movies?page=1&limit=20",
-            "categories": "/categories?page=1",
+            "movies": "/movies?page=1&limit=20&domain=new15.hdhub4u.cl",
+            "categories": "/categories?page=1&domain=new15.hdhub4u.cl",
             "extract": "/extract?url=YOUR_PAGE_URL",
+            "bulk_extract": "/extract-multiple?urls=URL1&urls=URL2",
             "documentation": "/docs"
         }
     }
@@ -620,7 +575,8 @@ def health():
 
     return {
         "status": "ok",
-        "service": "Movie Metadata API"
+        "service": "Multi-Domain Movie Metadata API",
+        "supported_domains": sorted(ALLOWED_DOMAINS)
     }
 
 
@@ -632,21 +588,23 @@ def health():
 def movies(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    category: str | None = Query(
-        None,
-        description="Filter by category name"
-    )
+    domain: str = Query("new15.hdhub4u.cl"),
+    category: str | None = None
 ):
 
-    items, listing_url = scrape_listing(page)
+    if domain not in ALLOWED_DOMAINS:
+        raise HTTPException(400, detail="Unsupported domain.")
+
+    base_url = f"https://{domain}/"
+
+    items, listing_url = scrape_listing(page, base_url)
 
     if category:
 
         wanted = category.strip().casefold()
 
         items = [
-            item
-            for item in items
+            item for item in items
             if any(
                 name.casefold() == wanted
                 for name in item["category_names"]
@@ -655,6 +613,7 @@ def movies(
 
     return {
         "success": True,
+        "domain": domain,
         "page": page,
         "limit": limit,
         "category_filter": category,
@@ -670,23 +629,28 @@ def movies(
 
 @app.get("/categories")
 def categories(
-    page: int = Query(1, ge=1)
+    page: int = Query(1, ge=1),
+    domain: str = Query("new15.hdhub4u.cl")
 ):
 
-    items, listing_url = scrape_listing(page)
+    if domain not in ALLOWED_DOMAINS:
+        raise HTTPException(400, detail="Unsupported domain.")
+
+    items, listing_url = scrape_listing(
+        page,
+        f"https://{domain}/"
+    )
 
     collected = {}
 
     for item in items:
 
         for category in item["categories"]:
-
-            collected[
-                category["name"].casefold()
-            ] = category
+            collected[category["name"].casefold()] = category
 
     return {
         "success": True,
+        "domain": domain,
         "page": page,
         "count": len(collected),
         "source_listing": listing_url,
@@ -698,17 +662,67 @@ def categories(
 
 
 # =========================================================
-# INDIVIDUAL PAGE EXTRACTION ENDPOINT
+# SINGLE EXTRACTION
 # =========================================================
 
 @app.get("/extract")
 def extract(
-    url: str = Query(
+    url: str = Query(..., description="Movie or series page URL")
+):
+
+    return scrape_individual_page(url)
+
+
+# =========================================================
+# MULTIPLE URL EXTRACTION
+# =========================================================
+
+@app.get("/extract-multiple")
+def extract_multiple(
+    urls: list[str] = Query(
         ...,
-        description="Individual movie or web-series page URL"
+        description="Provide multiple movie or series URLs",
+        min_length=1,
+        max_length=20
     )
 ):
 
-    validate_source_url(url)
+    results = []
 
-    return scrape_individual_page(url)
+    for url in urls:
+
+        try:
+
+            validate_source_url(url)
+
+            data = scrape_individual_page(url)
+
+            results.append(data)
+
+        except HTTPException as exc:
+
+            results.append({
+                "success": False,
+                "source_url": url,
+                "error": exc.detail
+            })
+
+        except Exception as exc:
+
+            results.append({
+                "success": False,
+                "source_url": url,
+                "error": str(exc)
+            })
+
+    return {
+        "success": True,
+        "total": len(urls),
+        "successful": sum(
+            1 for item in results if item["success"]
+        ),
+        "failed": sum(
+            1 for item in results if not item["success"]
+        ),
+        "results": results
+    }
